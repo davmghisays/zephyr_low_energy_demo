@@ -1,0 +1,39 @@
+mainmenu "Demo de energia NUCLEO-WL55JC1"
+
+source "Kconfig.zephyr"
+
+menu "Demo de energia"
+
+choice DEMO_ENERGY_MODE
+	prompt "Politica de energia de la demo"
+	default DEMO_MODE_SAVING
+
+config DEMO_MODE_REFERENCE
+	bool "Referencia: bloquear los estados PM"
+
+config DEMO_MODE_RESPONSE
+	bool "Respuesta rapida: limitar la latencia de salida"
+
+config DEMO_MODE_SAVING
+	bool "Ahorro: politica sin restricciones de la aplicacion"
+
+endchoice
+
+config DEMO_CONSOLE_OUTPUT
+	bool "Mostrar diagnostico y muestras por consola"
+	default n
+	help
+	  Active esta opcion solo para comprobar el sensor. La consola cambia el
+	  consumo y no debe estar activa durante las medidas en JP1.
+
+config DEMO_SAMPLE_INTERVAL_MS
+	int "Intervalo entre inicios de medida (ms)"
+	range 100 60000
+	default 5000
+
+config DEMO_RESPONSE_LATENCY_US
+	int "Latencia maxima solicitada en modo respuesta (us)"
+	range 1 1000000
+	default 5
+
+endmenu

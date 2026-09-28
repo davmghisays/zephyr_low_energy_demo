@@ -1,0 +1,100 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Demo: Build profile",
+      "type": "process",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/build-profile.ps1",
+        "-Profile",
+        "${input:demoProfile}"
+      ],
+      "problemMatcher": ["$gcc"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    },
+    {
+      "label": "Demo: Flash profile",
+      "type": "process",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/flash-profile.ps1",
+        "-Profile",
+        "${input:demoProfile}"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+    {
+      "label": "List COM Ports",
+      "type": "process",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_SerialPort | Select-Object DeviceID, Name, Description"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Serial Monitor",
+      "type": "process",
+      "command": "C:/Program Files/PuTTY/plink.exe",
+      "args": [
+        "-serial",
+        "${input:serialPort}",
+        "-sercfg",
+        "115200,8,n,1,N"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "demoProfile",
+      "type": "pickString",
+      "description": "Perfil de la demo",
+      "default": "diagnostic",
+      "options": [
+        "diagnostic",
+        "verify-reference",
+        "verify-response",
+        "verify-saving",
+        "reference",
+        "response",
+        "saving",
+        "saving-fast"
+      ]
+    },
+    {
+      "id": "serialPort",
+      "type": "promptString",
+      "description": "Puerto COM de la NUCLEO-WL55JC",
+      "default": "COM5"
+    }
+  ]
+}
