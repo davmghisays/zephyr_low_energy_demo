@@ -19,7 +19,7 @@
 
 #if !DT_NODE_HAS_PROP(USER_NODE, io_channels)
 #error "El overlay debe definir zephyr,user/io-channels"
-#endif
+#endif000000000000
 
 static const struct adc_dt_spec light_adc = ADC_DT_SPEC_GET(USER_NODE);
 
@@ -109,7 +109,7 @@ static void print_startup_diagnostic(void)
 	uint32_t available_mask = 0U;
 
 	/*
-	 * Capturamos la disponibilidad antes del primer printk. El driver UART
+	 * Se captura la disponibilidad antes del primer printk. El driver UART
 	 * STM32 bloquea temporalmente los estados STOP mientras transmite; si se
 	 * consultase dentro del bucle de impresion, todos aparecerian como "no".
 	 */
@@ -124,9 +124,9 @@ static void print_startup_diagnostic(void)
 	printk("Modo: %s; intervalo: %d ms; A0/PB1/ADC1_IN5\n",
 	       energy_mode_name(), CONFIG_DEMO_SAMPLE_INTERVAL_MS);
 	printk("La consola es solo diagnostica: no mida corriente con este perfil.\n");
-	printk("Estados PM declarados (permitido por la politica de este modo):\n");
+	printk("Estados PM declarados para CPU0:\n");
 	for (uint8_t i = 0U; i < count; i++) {
-		printk("  %s subestado=%u residencia=%u us salida=%u us permitido=%s\n",
+		printk("  %s subestado=%u residencia=%u us salida=%u us disponible=%s\n",
 		       pm_state_to_str(states[i].state), states[i].substate_id,
 		       states[i].min_residency_us, states[i].exit_latency_us,
 		       ((i < 32U) && ((available_mask & BIT(i)) != 0U)) ? "si" : "no");

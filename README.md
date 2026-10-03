@@ -31,11 +31,10 @@ Entorno comprobado para este proyecto:
   ella, STM32WL presenta el fallo conocido de quedarse bloqueado tras la
   primera lectura (`zephyrproject-rtos/zephyr#37352`).
 
-Validacion realizada en este equipo: compilan `diagnostic`, los tres perfiles
-`verify-*`, los tres perfiles silenciosos y `saving-fast`. Durante esta
-preparacion no habia ningun ST-LINK conectado, por lo que las lecturas ADC y
-las corrientes quedan deliberadamente como pruebas fisicas pendientes; no se
-han inventado resultados de hardware.
+Validacion realizada en esta placa: compilan y se pueden flashear `diagnostic`,
+los tres perfiles `verify-*`, los tres perfiles silenciosos y `saving-fast`.
+Tambien se comprobo que el ADC sigue leyendo despues de varios ciclos de
+suspension y reanudacion.
 
 `CMakeLists.txt` aplica en Windows `-fno-use-linker-plugin`: en esta instalacion
 `ld.bfd` no puede cargar `liblto_plugin.dll`. La demo no usa LTO, por lo que el
@@ -119,10 +118,12 @@ Abra el puerto serie a `115200 8N1`. Tambien se puede usar
 `Ctrl+Shift+B -> Demo: Build profile`, y las tareas `Demo: Flash profile` y
 `Serial Monitor` de VS Code.
 
-La salida muestra el modo, los tres estados y una linea por segundo:
+La salida muestra el modo y una linea por segundo:
 
 ```text
-muestra=12 raw=2870 tension=2312 mV digest=0x...
+Modo: referencia
+Intervalo: 1000 ms; ADC: A0/PB1
+Muestra 12: 2870
 ```
 
 Ilumine y tape la LDR. Anote al menos cinco valores en cada condicion. Deben
@@ -137,18 +138,10 @@ la alimentacion al retirar o mover una sonda. Para medir, las dos sondas deben
 permanecer sujetas a los dos pines de JP1 durante toda la prueba; use pinzas o
 ganchos, no contactos manuales intermitentes.
 
-Para comprobar la misma lectura y las restricciones de cada modo use, uno por
-uno, `verify-reference`, `verify-response` y `verify-saving`. Estos perfiles
-tienen consola y periodo de 1 s: sirven para verificar, **no para comparar
-corriente**. En la lista de estados disponibles debe verse:
-
-- referencia: los tres en `no`;
-- respuesta: solo el subestado 1 en `si`;
-- ahorro: los tres en `si`.
-
-Ese `si/no` significa **permitido por la politica del modo**, no que el chip
-carezca del estado. Por eso `diagnostic`, que usa intencionadamente la politica
-de referencia, muestra los tres en `no` y aun asi sigue tomando muestras.
+Para comprobar la misma lectura en cada modo use, uno por uno,
+`verify-reference`, `verify-response` y `verify-saving`. Estos perfiles muestran
+el nombre del modo y una lectura cada segundo. Sirven para verificar que la
+aplicacion despierta y sigue leyendo, **no para comparar corriente**.
 
 ## 4. Compilaciones de medida
 
