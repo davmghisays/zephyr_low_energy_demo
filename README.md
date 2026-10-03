@@ -5,6 +5,19 @@ energia sin BLE, LoRa ni ninguna transmision. Los tres binarios de medida hacen
 exactamente ocho conversiones ADC cada 5000 ms; solo cambia la restriccion que
 la aplicacion entrega a la politica PM de Zephyr.
 
+## 0. Mapa mental: que hace cada cosa
+
+- **Compilar** crea un firmware, pero no cambia la placa.
+- **Flashear** copia ese firmware al STM32WL y reinicia la aplicacion.
+- `diagnostic` comprueba el sensor por consola cada segundo. Usa el modo
+  `reference` para que el primer ensayo sea sencillo y despierte siempre.
+- `verify-reference`, `verify-response` y `verify-saving` comprueban por
+  consola cada politica. No se usan para comparar corriente.
+- `reference`, `response` y `saving` son los firmwares silenciosos de medida.
+  No imprimen nada: que la terminal este vacia es intencionado.
+- JP1 no es solo un punto de prueba. Es parte del cable que alimenta el MCU:
+  debe estar cerrado por el jumper o continuamente por el amperimetro.
+
 Entorno comprobado para este proyecto:
 
 - Zephyr `v4.4.2` y west `1.5.0`.
@@ -13,6 +26,10 @@ Entorno comprobado para este proyecto:
 - CPU0: STM32WL55 Cortex-M4.
 - Estados declarados: `suspend-to-idle`, subestados 1, 2 y 3. El driver de
   esta version los implementa respectivamente como STOP0, STOP1 y STOP2.
+- La gestion de energia de dispositivos esta habilitada para que el driver
+  suspenda y reinicialice correctamente el ADC alrededor de cada STOP. Sin
+  ella, STM32WL presenta el fallo conocido de quedarse bloqueado tras la
+  primera lectura (`zephyrproject-rtos/zephyr#37352`).
 
 Validacion realizada en este equipo: compilan `diagnostic`, los tres perfiles
 `verify-*`, los tres perfiles silenciosos y `saving-fast`. Durante esta
@@ -113,6 +130,13 @@ cambiar claramente y, con el circuito confirmado arriba, aumentar al iluminar.
 No continue a la medida de corriente si aparecen errores ADC o si la lectura no
 cambia.
 
+Si aparece solamente `muestra=1`, haga primero esta prueba sin multimetro:
+apague, coloque el jumper JP1, encienda y repita `diagnostic`. Si asi aparecen
+`muestra=2`, `muestra=3`, etc., el firmware funciona y antes se estaba abriendo
+la alimentacion al retirar o mover una sonda. Para medir, las dos sondas deben
+permanecer sujetas a los dos pines de JP1 durante toda la prueba; use pinzas o
+ganchos, no contactos manuales intermitentes.
+
 Para comprobar la misma lectura y las restricciones de cada modo use, uno por
 uno, `verify-reference`, `verify-response` y `verify-saving`. Estos perfiles
 tienen consola y periodo de 1 s: sirven para verificar, **no para comparar
@@ -121,6 +145,10 @@ corriente**. En la lista de estados disponibles debe verse:
 - referencia: los tres en `no`;
 - respuesta: solo el subestado 1 en `si`;
 - ahorro: los tres en `si`.
+
+Ese `si/no` significa **permitido por la politica del modo**, no que el chip
+carezca del estado. Por eso `diagnostic`, que usa intencionadamente la politica
+de referencia, muestra los tres en `no` y aun asi sigue tomando muestras.
 
 ## 4. Compilaciones de medida
 
@@ -165,6 +193,17 @@ Procedimiento seguro para cada firmware:
    alimentacion y use un rango con menor resistencia interna o un analizador de
    potencia.
 8. Apague antes de cambiar firmware, rango, puntas o recolocar JP1.
+
+Receta practica, sin alternar entre jumper y sondas con la placa encendida:
+
+1. **Fase funcional:** JP1 colocado, multimetro fuera. Flashee
+   `diagnostic` o `verify-<modo>` y compruebe varias muestras.
+2. **Fase de preparacion:** flashee el perfil silencioso deseado con JP1 aun
+   colocado y desconecte el USB.
+3. **Fase de medida:** retire JP1, conecte firmemente el amperimetro en modo
+   corriente entre ambos pines y solo entonces vuelva a conectar el USB.
+4. Mantenga las sondas conectadas. Si se abre el circuito, el MCU se apaga y
+   la siguiente conexion comienza otra vez en `muestra=1`.
 
 Mantenga en todas las pruebas la misma luz, cableado, alimentacion, rango del
 multimetro y estado de los jumpers. Los LED del ST-LINK pueden seguir encendidos,
@@ -237,3 +276,4 @@ mismo trabajo activo mas veces por segundo.
 - [Estados STM32WL declarados en Zephyr 4.4.2](https://github.com/zephyrproject-rtos/zephyr/blob/v4.4.2/dts/arm/st/wl/stm32wl.dtsi)
 - [Binding `zephyr,power-state`](https://docs.zephyrproject.org/latest/build/dts/api/bindings/power/zephyr%2Cpower-state.html)
 - [API de politica PM de Zephyr](https://docs.zephyrproject.org/latest/doxygen/html/group__subsys__pm__sys__policy.html)
+- [Incidencia STM32WL: ADC bloqueado tras la primera lectura con PM](https://github.com/zephyrproject-rtos/zephyr/issues/37352)

@@ -25,6 +25,7 @@ $env:ZEPHYR_TOOLCHAIN_VARIANT = "zephyr"
 $env:ZEPHYR_SDK_INSTALL_DIR = $SdkDir
 
 $Mode = switch -Wildcard ($Profile) {
+    "diagnostic" { "reference"; break }
     "*reference" { "reference"; break }
     "*response"  { "response"; break }
     default       { "saving" }

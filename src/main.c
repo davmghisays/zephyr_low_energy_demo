@@ -102,18 +102,34 @@ static int read_light_cycle(uint16_t *average)
 }
 
 #if defined(CONFIG_DEMO_CONSOLE_OUTPUT)
-static void print_power_states(void)
+static void print_startup_diagnostic(void)
 {
 	const struct pm_state_info *states;
 	uint8_t count = pm_state_cpu_get_all(0U, &states);
+	uint32_t available_mask = 0U;
 
-	printk("Estados PM declarados para CPU0:\n");
+	/*
+	 * Capturamos la disponibilidad antes del primer printk. El driver UART
+	 * STM32 bloquea temporalmente los estados STOP mientras transmite; si se
+	 * consultase dentro del bucle de impresion, todos aparecerian como "no".
+	 */
+	for (uint8_t i = 0U; (i < count) && (i < 32U); i++) {
+		if (pm_policy_state_is_available(states[i].state,
+						 states[i].substate_id)) {
+			available_mask |= BIT(i);
+		}
+	}
+
+	printk("\nDemo de energia NUCLEO-WL55JC1 + KY-018\n");
+	printk("Modo: %s; intervalo: %d ms; A0/PB1/ADC1_IN5\n",
+	       energy_mode_name(), CONFIG_DEMO_SAMPLE_INTERVAL_MS);
+	printk("La consola es solo diagnostica: no mida corriente con este perfil.\n");
+	printk("Estados PM declarados (permitido por la politica de este modo):\n");
 	for (uint8_t i = 0U; i < count; i++) {
-		printk("  %s subestado=%u residencia=%u us salida=%u us disponible=%s\n",
+		printk("  %s subestado=%u residencia=%u us salida=%u us permitido=%s\n",
 		       pm_state_to_str(states[i].state), states[i].substate_id,
 		       states[i].min_residency_us, states[i].exit_latency_us,
-		       pm_policy_state_is_available(states[i].state,
-					    states[i].substate_id) ? "si" : "no");
+		       ((i < 32U) && ((available_mask & BIT(i)) != 0U)) ? "si" : "no");
 	}
 }
 #endif
@@ -143,11 +159,7 @@ int main(void)
 	apply_energy_policy();
 
 #if defined(CONFIG_DEMO_CONSOLE_OUTPUT)
-	printk("\nDemo de energia NUCLEO-WL55JC1 + KY-018\n");
-	printk("Modo: %s; intervalo: %d ms; A0/PB1/ADC1_IN5\n",
-	       energy_mode_name(), CONFIG_DEMO_SAMPLE_INTERVAL_MS);
-	printk("La consola es solo diagnostica: no mida corriente con este perfil.\n");
-	print_power_states();
+	print_startup_diagnostic();
 #endif
 
 	next_sample_ms = k_uptime_get();
