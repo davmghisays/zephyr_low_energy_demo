@@ -1,214 +1,170 @@
-#include <errno.h>
-#include <inttypes.h>
 #include <stdint.h>
 
-#include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/adc.h>
+#include <zephyr/drivers/gpio.h>
 #include <zephyr/kernel.h>
 #include <zephyr/pm/policy.h>
-#include <zephyr/pm/state.h>
-#include <zephyr/sys/util.h>
-
-#if defined(CONFIG_DEMO_CONSOLE_OUTPUT)
+#include <zephyr/sys/atomic.h>
 #include <zephyr/sys/printk.h>
-#endif
 
-#define USER_NODE DT_PATH(zephyr_user)
-#define READS_PER_CYCLE 8U
+#define ADC_NODE DT_PATH(zephyr_user)
+#define READS_PER_CYCLE 8
+#define BUTTON_COUNT 3
 
-#if !DT_NODE_HAS_PROP(USER_NODE, io_channels)
-#error "El overlay debe definir zephyr,user/io-channels"
-#endif000000000000
+enum energy_mode {
+	MODE_NONE = -1,
+	MODE_REFERENCE,
+	MODE_RESPONSE,
+	MODE_SAVING,
+};
 
-static const struct adc_dt_spec light_adc = ADC_DT_SPEC_GET(USER_NODE);
+static const struct gpio_dt_spec buttons[BUTTON_COUNT] = {
+	GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios),
+	GPIO_DT_SPEC_GET(DT_ALIAS(sw1), gpios),
+	GPIO_DT_SPEC_GET(DT_ALIAS(sw2), gpios),
+};
 
-/*
- * Se mantienen volatile para poder inspeccionarlas con un depurador despues
- * de una prueba funcional. No se debe dejar el depurador conectado al medir.
- */
-volatile uint16_t demo_last_raw;
-volatile uint32_t demo_sample_count;
-volatile uint32_t demo_sample_digest;
-volatile int demo_last_error;
+static const struct adc_dt_spec light_adc = ADC_DT_SPEC_GET(ADC_NODE);
+static struct gpio_callback button_callbacks[BUTTON_COUNT];
+static struct pm_policy_latency_request latency_request;
+static struct k_work mode_work;
+static atomic_t requested_mode = MODE_SAVING;
+static enum energy_mode current_mode = MODE_NONE;
 
-#if defined(CONFIG_DEMO_MODE_RESPONSE)
-static struct pm_policy_latency_request response_latency;
-#endif
-
-#if defined(CONFIG_DEMO_CONSOLE_OUTPUT)
-static const char *energy_mode_name(void)
+static void set_energy_mode(enum energy_mode mode)
 {
-#if defined(CONFIG_DEMO_MODE_REFERENCE)
-	return "referencia";
-#elif defined(CONFIG_DEMO_MODE_RESPONSE)
-	return "respuesta-rapida";
-#else
-	return "ahorro";
-#endif
-}
-#endif
-
-static void apply_energy_policy(void)
-{
-#if defined(CONFIG_DEMO_MODE_REFERENCE)
-	/*
-	 * Impide que Zephyr seleccione cualquiera de los estados PM durante las
-	 * esperas. El hilo aun se bloquea y el idle normal puede ejecutar WFI.
-	 * El perfil es fijo: el lock dura toda la ejecucion; si se cambiase el
-	 * modo en runtime se liberaria con pm_policy_state_all_lock_put().
-	 */
-	pm_policy_state_all_lock_get();
-#elif defined(CONFIG_DEMO_MODE_RESPONSE)
-	/*
-	 * Deja reposar al sistema, pero excluye estados cuya exit-latency-us
-	 * supere el limite. La solicitud dura toda la ejecucion; en un cambio de
-	 * modo se retiraria con pm_policy_latency_request_remove().
-	 */
-	pm_policy_latency_request_add(&response_latency,
-				      CONFIG_DEMO_RESPONSE_LATENCY_US);
-#else
-	/* Ahorro: la aplicacion no limita los estados que puede elegir Zephyr. */
-#endif
-}
-
-static int read_light_cycle(uint16_t *average)
-{
-	uint32_t sum = 0U;
-
-	for (uint32_t i = 0U; i < READS_PER_CYCLE; i++) {
-		uint16_t raw = 0U;
-		struct adc_sequence sequence = {
-			.buffer = &raw,
-			.buffer_size = sizeof(raw),
-		};
-		int ret;
-
-		ret = adc_sequence_init_dt(&light_adc, &sequence);
-		if (ret < 0) {
-			return ret;
-		}
-
-		ret = adc_read_dt(&light_adc, &sequence);
-		if (ret < 0) {
-			return ret;
-		}
-
-		sum += raw;
+	if (mode == current_mode) {
+		return;
 	}
 
-	*average = (uint16_t)(sum / READS_PER_CYCLE);
+	/* Primero se retira la restriccion del modo anterior. */
+	if (current_mode == MODE_REFERENCE) {
+		pm_policy_state_all_lock_put();
+	} else if (current_mode == MODE_RESPONSE) {
+		pm_policy_latency_request_remove(&latency_request);
+	}
+
+	if (mode == MODE_REFERENCE) {
+		pm_policy_state_all_lock_get();
+		printk("Modo: referencia\n");
+	} else if (mode == MODE_RESPONSE) {
+		pm_policy_latency_request_add(&latency_request,
+					      CONFIG_DEMO_RESPONSE_LATENCY_US);
+		printk("Modo: respuesta rapida\n");
+	} else {
+		printk("Modo: ahorro\n");
+	}
+
+	current_mode = mode;
+}
+
+static void change_mode(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	/* Las restricciones PM se cambian fuera de la interrupcion GPIO. */
+	set_energy_mode((enum energy_mode)atomic_get(&requested_mode));
+}
+
+static void button_pressed(const struct device *port,
+			   struct gpio_callback *callback, uint32_t pins)
+{
+	ARG_UNUSED(port);
+	ARG_UNUSED(pins);
+
+	for (int i = 0; i < BUTTON_COUNT; i++) {
+		if (callback == &button_callbacks[i]) {
+			atomic_set(&requested_mode, i);
+			k_work_submit(&mode_work);
+			return;
+		}
+	}
+}
+
+static int setup_buttons(void)
+{
+	for (int i = 0; i < BUTTON_COUNT; i++) {
+		if (!gpio_is_ready_dt(&buttons[i]) ||
+		    gpio_pin_configure_dt(&buttons[i], GPIO_INPUT) != 0) {
+			return -1;
+		}
+
+		gpio_init_callback(&button_callbacks[i], button_pressed,
+				   BIT(buttons[i].pin));
+		if (gpio_add_callback(buttons[i].port, &button_callbacks[i]) != 0 ||
+		    gpio_pin_interrupt_configure_dt(&buttons[i],
+						    GPIO_INT_EDGE_TO_ACTIVE) != 0) {
+			return -1;
+		}
+	}
+
 	return 0;
 }
 
-#if defined(CONFIG_DEMO_CONSOLE_OUTPUT)
-static void print_startup_diagnostic(void)
+static int read_light(uint16_t *average)
 {
-	const struct pm_state_info *states;
-	uint8_t count = pm_state_cpu_get_all(0U, &states);
-	uint32_t available_mask = 0U;
+	uint16_t sample;
+	uint32_t sum = 0;
+	struct adc_sequence sequence = {
+		.buffer = &sample,
+		.buffer_size = sizeof(sample),
+	};
 
-	/*
-	 * Se captura la disponibilidad antes del primer printk. El driver UART
-	 * STM32 bloquea temporalmente los estados STOP mientras transmite; si se
-	 * consultase dentro del bucle de impresion, todos aparecerian como "no".
-	 */
-	for (uint8_t i = 0U; (i < count) && (i < 32U); i++) {
-		if (pm_policy_state_is_available(states[i].state,
-						 states[i].substate_id)) {
-			available_mask |= BIT(i);
+	int err = adc_sequence_init_dt(&light_adc, &sequence);
+	if (err != 0) {
+		return err;
+	}
+
+	for (int i = 0; i < READS_PER_CYCLE; i++) {
+		err = adc_read_dt(&light_adc, &sequence);
+		if (err != 0) {
+			return err;
 		}
+		sum += sample;
 	}
 
-	printk("\nDemo de energia NUCLEO-WL55JC1 + KY-018\n");
-	printk("Modo: %s; intervalo: %d ms; A0/PB1/ADC1_IN5\n",
-	       energy_mode_name(), CONFIG_DEMO_SAMPLE_INTERVAL_MS);
-	printk("La consola es solo diagnostica: no mida corriente con este perfil.\n");
-	printk("Estados PM declarados para CPU0:\n");
-	for (uint8_t i = 0U; i < count; i++) {
-		printk("  %s subestado=%u residencia=%u us salida=%u us disponible=%s\n",
-		       pm_state_to_str(states[i].state), states[i].substate_id,
-		       states[i].min_residency_us, states[i].exit_latency_us,
-		       ((i < 32U) && ((available_mask & BIT(i)) != 0U)) ? "si" : "no");
-	}
+	*average = sum / READS_PER_CYCLE;
+	return 0;
 }
-#endif
 
 int main(void)
 {
-	int ret;
-	int64_t next_sample_ms;
+	int64_t next_sample = k_uptime_get();
+	uint32_t sample_count = 0;
 
-	if (!adc_is_ready_dt(&light_adc)) {
-		demo_last_error = -ENODEV;
-#if defined(CONFIG_DEMO_CONSOLE_OUTPUT)
-		printk("ERROR: ADC no preparado (%s)\n", light_adc.dev->name);
-#endif
+	if (!adc_is_ready_dt(&light_adc) || adc_channel_setup_dt(&light_adc) != 0) {
+		printk("Error al iniciar el ADC\n");
 		return 0;
 	}
 
-	ret = adc_channel_setup_dt(&light_adc);
-	if (ret < 0) {
-		demo_last_error = ret;
-#if defined(CONFIG_DEMO_CONSOLE_OUTPUT)
-		printk("ERROR: configuracion ADC: %d\n", ret);
-#endif
+	k_work_init(&mode_work, change_mode);
+	set_energy_mode(MODE_SAVING);
+
+	if (setup_buttons() != 0) {
+		printk("Error al iniciar los botones\n");
 		return 0;
 	}
 
-	apply_energy_policy();
+	printk("B1: referencia; B2: respuesta rapida; B3: ahorro\n");
+	printk("Intervalo: %d ms; ADC: A0/PB1\n",
+	       CONFIG_DEMO_SAMPLE_INTERVAL_MS);
 
-#if defined(CONFIG_DEMO_CONSOLE_OUTPUT)
-	print_startup_diagnostic();
-#endif
-
-	next_sample_ms = k_uptime_get();
-	while (true) {
+	while (1) {
 		uint16_t raw;
+		int err = read_light(&raw);
 
-		ret = read_light_cycle(&raw);
-		demo_last_error = ret;
-		if (ret == 0) {
-			int32_t millivolts = raw;
-			int mv_ret = adc_raw_to_millivolts_dt(&light_adc,
-							  &millivolts);
-
-			demo_last_raw = raw;
-			demo_sample_count++;
-			demo_sample_digest = (demo_sample_digest * 33U) ^ raw;
-
-#if defined(CONFIG_DEMO_CONSOLE_OUTPUT)
-			if (mv_ret == 0) {
-				printk("muestra=%" PRIu32 " raw=%u tension=%" PRId32
-				       " mV digest=0x%08" PRIx32 "\n",
-				       demo_sample_count, raw, millivolts,
-				       demo_sample_digest);
-			} else {
-				printk("muestra=%" PRIu32 " raw=%u digest=0x%08" PRIx32
-				       " (mV no disponible: %d)\n",
-				       demo_sample_count, raw, demo_sample_digest, mv_ret);
-			}
-#else
-			ARG_UNUSED(mv_ret);
-			ARG_UNUSED(millivolts);
-#endif
+		if (err == 0) {
+			sample_count++;
+			printk("Muestra %u: %u\n", (unsigned int)sample_count,
+			       (unsigned int)raw);
+		} else {
+			printk("Error al leer el ADC\n");
 		}
-#if defined(CONFIG_DEMO_CONSOLE_OUTPUT)
-		else {
-			printk("ERROR: lectura ADC: %d\n", ret);
-		}
-#endif
 
-		/*
-		 * Fecha absoluta: el inicio de cada ciclo conserva el mismo periodo
-		 * aunque la lectura tarde algo. Mientras duerme, el hilo main no esta
-		 * ejecutable y el hilo idle deja que la politica PM elija un estado.
-		 */
-		next_sample_ms += CONFIG_DEMO_SAMPLE_INTERVAL_MS;
-		if (next_sample_ms <= k_uptime_get()) {
-			next_sample_ms = k_uptime_get() + CONFIG_DEMO_SAMPLE_INTERVAL_MS;
-		}
-		k_sleep(K_TIMEOUT_ABS_MS(next_sample_ms));
+		next_sample += CONFIG_DEMO_SAMPLE_INTERVAL_MS;
+
+		/* Al dormir main, el hilo idle puede aplicar la politica de energia. */
+		k_sleep(K_TIMEOUT_ABS_MS(next_sample));
 	}
 
 	return 0;

@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Demo: Build profile",
+      "label": "Demo: Build",
       "type": "process",
       "command": "powershell",
       "args": [
@@ -10,9 +10,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${workspaceFolder}/scripts/build-profile.ps1",
-        "-Profile",
-        "${input:demoProfile}"
+        "${workspaceFolder}/scripts/build.ps1"
       ],
       "problemMatcher": ["$gcc"],
       "group": {
@@ -26,7 +24,7 @@
       }
     },
     {
-      "label": "Demo: Flash profile",
+      "label": "Demo: Flash",
       "type": "process",
       "command": "powershell",
       "args": [
@@ -34,9 +32,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${workspaceFolder}/scripts/flash-profile.ps1",
-        "-Profile",
-        "${input:demoProfile}"
+        "${workspaceFolder}/scripts/flash.ps1"
       ],
       "problemMatcher": [],
       "presentation": {
@@ -74,22 +70,6 @@
     }
   ],
   "inputs": [
-    {
-      "id": "demoProfile",
-      "type": "pickString",
-      "description": "Perfil de la demo",
-      "default": "diagnostic",
-      "options": [
-        "diagnostic",
-        "verify-reference",
-        "verify-response",
-        "verify-saving",
-        "reference",
-        "response",
-        "saving",
-        "saving-fast"
-      ]
-    },
     {
       "id": "serialPort",
       "type": "promptString",

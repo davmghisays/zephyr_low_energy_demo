@@ -1,20 +1,18 @@
 # Demo real de energia con Zephyr, NUCLEO-WL55JC1 y KY-018
 
 La aplicacion mide luz por `A0/PB1/ADC1_IN5` y compara tres politicas de
-energia sin BLE, LoRa ni ninguna transmision. Los tres binarios de medida hacen
-exactamente ocho conversiones ADC cada 5000 ms; solo cambia la restriccion que
-la aplicacion entrega a la politica PM de Zephyr.
+energia sin BLE, LoRa ni ninguna transmision. Las tres mediciones hacen
+exactamente ocho conversiones ADC y escriben una linea por el puerto serie cada
+1000 ms; solo cambia la restriccion que la aplicacion entrega a la politica PM
+de Zephyr.
 
 ## 0. Mapa mental: que hace cada cosa
 
 - **Compilar** crea un firmware, pero no cambia la placa.
 - **Flashear** copia ese firmware al STM32WL y reinicia la aplicacion.
-- `diagnostic` comprueba el sensor por consola cada segundo. Usa el modo
-  `reference` para que el primer ensayo sea sencillo y despierte siempre.
-- `verify-reference`, `verify-response` y `verify-saving` comprueban por
-  consola cada politica. No se usan para comparar corriente.
-- `reference`, `response` y `saving` son los firmwares silenciosos de medida.
-  No imprimen nada: que la terminal este vacia es intencionado.
+- Los botones cambian el modo durante la ejecucion, sin recompilar ni flashear.
+- Hay una sola configuracion: siempre muestra una lectura por segundo en el
+  monitor serie.
 - JP1 no es solo un punto de prueba. Es parte del cable que alimenta el MCU:
   debe estar cerrado por el jumper o continuamente por el amperimetro.
 
@@ -31,10 +29,9 @@ Entorno comprobado para este proyecto:
   ella, STM32WL presenta el fallo conocido de quedarse bloqueado tras la
   primera lectura (`zephyrproject-rtos/zephyr#37352`).
 
-Validacion realizada en esta placa: compilan y se pueden flashear `diagnostic`,
-los tres perfiles `verify-*`, los tres perfiles silenciosos y `saving-fast`.
-Tambien se comprobo que el ADC sigue leyendo despues de varios ciclos de
-suspension y reanudacion.
+Validacion realizada en esta placa: la configuracion unica compila y se puede
+flashear. Tambien se comprobo que el ADC sigue leyendo despues de varios ciclos
+de suspension y reanudacion.
 
 `CMakeLists.txt` aplica en Windows `-fno-use-linker-plugin`: en esta instalacion
 `ld.bfd` no puede cargar `liblto_plugin.dll`. La demo no usa LTO, por lo que el
@@ -79,13 +76,20 @@ sube con mas luz porque la LDR une `+` con `S` y la resistencia de 10 kohm une
 `S` con `-`. Alimentarlo a 3.3 V garantiza que la señal no pueda superar la
 alimentacion admitida por el ADC.
 
-## 2. Que hace cada modo
+## 2. Elegir el modo con los botones
 
-| Perfil de medida | Restriccion de la aplicacion | Estado esperado durante una espera larga |
-|---|---|---|
-| `reference` | `pm_policy_state_all_lock_get()` bloquea los estados PM | idle normal, sin STOP gestionado por PM |
-| `response` | solicitud maxima de salida de 5 us | solo subestado 1, STOP0 |
-| `saving` | ninguna restriccion de la aplicacion | subestado 3, STOP2 |
+El firmware arranca en ahorro. Los tres botones integrados seleccionan el modo
+inmediatamente y el monitor serie confirma cada cambio:
+
+| Boton | GPIO | Modo | Restriccion de la aplicacion | Estado esperado durante una espera larga |
+|---|---|---|---|---|
+| `B1/SW1` | PA0 | referencia | `pm_policy_state_all_lock_get()` bloquea los estados PM | idle normal, sin STOP gestionado por PM |
+| `B2/SW2` | PA1 | respuesta rapida | solicitud maxima de salida de 5 us | solo subestado 1, STOP0 |
+| `B3/SW3` | PC6 | ahorro | ninguna restriccion de la aplicacion | subestado 3, STOP2 |
+
+Al cambiar, el programa retira primero la restriccion anterior y aplica la
+nueva. Pulsar otra vez el boton del modo actual no acumula restricciones. No es
+necesario recompilar ni reiniciar la placa.
 
 El hilo principal usa una espera con fecha absoluta. Mientras espera no esta
 ejecutable, por lo que el hilo idle puede aplicar la politica. `reference` no
@@ -105,23 +109,24 @@ STOP1/2). No son una garantia de latencia extremo a extremo de Zephyr: para una
 afirmacion de tiempo real habria que medir desde el evento de despertar hasta
 un GPIO de la aplicacion con osciloscopio y ajustar la metadata.
 
-## 3. Compilar y probar primero el sensor
+## 3. Compilar, flashear y probar
 
 Desde PowerShell en la raiz del proyecto:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-profile.ps1 -Profile diagnostic
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\flash-profile.ps1 -Profile diagnostic
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\flash.ps1
 ```
 
 Abra el puerto serie a `115200 8N1`. Tambien se puede usar
-`Ctrl+Shift+B -> Demo: Build profile`, y las tareas `Demo: Flash profile` y
+`Ctrl+Shift+B -> Demo: Build`, y las tareas `Demo: Flash` y
 `Serial Monitor` de VS Code.
 
 La salida muestra el modo y una linea por segundo:
 
 ```text
-Modo: referencia
+Modo: ahorro
+B1: referencia; B2: respuesta rapida; B3: ahorro
 Intervalo: 1000 ms; ADC: A0/PB1
 Muestra 12: 2870
 ```
@@ -131,39 +136,24 @@ cambiar claramente y, con el circuito confirmado arriba, aumentar al iluminar.
 No continue a la medida de corriente si aparecen errores ADC o si la lectura no
 cambia.
 
-Si aparece solamente `muestra=1`, haga primero esta prueba sin multimetro:
-apague, coloque el jumper JP1, encienda y repita `diagnostic`. Si asi aparecen
-`muestra=2`, `muestra=3`, etc., el firmware funciona y antes se estaba abriendo
+Si aparece solamente `Muestra 1`, haga primero esta prueba sin multimetro:
+apague, coloque el jumper JP1, encienda y repita la prueba. Si asi aparecen
+`Muestra 2`, `Muestra 3`, etc., el firmware funciona y antes se estaba abriendo
 la alimentacion al retirar o mover una sonda. Para medir, las dos sondas deben
 permanecer sujetas a los dos pines de JP1 durante toda la prueba; use pinzas o
 ganchos, no contactos manuales intermitentes.
 
-Para comprobar la misma lectura en cada modo use, uno por uno,
-`verify-reference`, `verify-response` y `verify-saving`. Estos perfiles muestran
-el nombre del modo y una lectura cada segundo. Sirven para verificar que la
-aplicacion despierta y sigue leyendo, **no para comparar corriente**.
+Pulse cada boton y compruebe que aparece el nombre correcto y que siguen
+llegando muestras. El firmware queda en `build/zephyr/zephyr.hex`; se compila y
+flashea una sola vez para probar los tres modos.
 
-## 4. Compilaciones de medida
+La consola permanece activa durante todas las medidas. Su consumo y sus
+despertares forman parte del resultado, por lo que estas medidas sirven para una
+comparacion relativa entre modos, no para declarar el consumo minimo absoluto
+del microcontrolador. El texto y la frecuencia de salida son iguales en los
+tres modos.
 
-Compile los tres perfiles silenciosos:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-profile.ps1 -Profile reference
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-profile.ps1 -Profile response
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-profile.ps1 -Profile saving
-```
-
-Cada uno genera `build-<perfil>/zephyr/zephyr.hex`. Para flashear, por ejemplo:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\flash-profile.ps1 -Profile response
-```
-
-Los perfiles de medida tienen consola, `printk`, logging, depuracion y LED de
-aplicacion desactivados. No cambian ni el periodo de 5000 ms ni las ocho
-conversiones y el calculo efectuado en cada ciclo.
-
-## 5. Medida correcta en JP1
+## 4. Medida correcta en JP1
 
 JP1 esta rotulado `I_SoC`. Segun el manual UM2592, al retirar su puente y poner
 un amperimetro en serie se mide toda la corriente del **STM32WL** (`I_RF +
@@ -189,14 +179,14 @@ Procedimiento seguro para cada firmware:
 
 Receta practica, sin alternar entre jumper y sondas con la placa encendida:
 
-1. **Fase funcional:** JP1 colocado, multimetro fuera. Flashee
-   `diagnostic` o `verify-<modo>` y compruebe varias muestras.
-2. **Fase de preparacion:** flashee el perfil silencioso deseado con JP1 aun
-   colocado y desconecte el USB.
+1. **Fase funcional:** JP1 colocado, multimetro fuera. Compile y flashee una
+   vez, seleccione el modo con su boton y compruebe varias muestras en serie.
+2. **Fase de preparacion:** cierre el monitor serie y desconecte el USB.
 3. **Fase de medida:** retire JP1, conecte firmemente el amperimetro en modo
    corriente entre ambos pines y solo entonces vuelva a conectar el USB.
+   Abra otra vez el monitor serie para confirmar que siguen apareciendo muestras.
 4. Mantenga las sondas conectadas. Si se abre el circuito, el MCU se apaga y
-   la siguiente conexion comienza otra vez en `muestra=1`.
+   la siguiente conexion comienza otra vez en `Muestra 1`.
 
 Mantenga en todas las pruebas la misma luz, cableado, alimentacion, rango del
 multimetro y estado de los jumpers. Los LED del ST-LINK pueden seguir encendidos,
@@ -208,27 +198,30 @@ pico breve de las ocho conversiones. Informe solo el promedio/intervalo visible.
 Para forma, amplitud y carga de los pulsos hace falta un power profiler,
 osciloscopio con shunt o instrumento equivalente.
 
-## 6. Protocolo repetible y tabla
+## 5. Protocolo repetible y tabla
 
-1. Ejecute antes `verify-<modo>`, ilumine/tape y confirme que sigue midiendo.
-2. Flashee el perfil silencioso correspondiente.
-3. Fije mecanicamente el sensor y la fuente de luz. Espere 30 s.
+1. Compile y flashee una vez. Ilumine/tape y confirme en el monitor serie que
+   sigue midiendo.
+2. Fije mecanicamente el sensor y la fuente de luz. Espere 30 s.
+3. Conecte el amperimetro en JP1 siguiendo el procedimiento anterior y mantenga
+   abierto el monitor serie.
 4. Registre durante 60 s el valor estable o minimo/maximo visibles.
-5. Repita tres veces por modo. Alterne el orden de modos para reducir deriva
-   termica y de bateria/fuente.
-6. Al final vuelva a ejecutar `verify-<modo>` y confirme otra vez luz/tapado.
+5. Pulse el boton del siguiente modo, sueltelo y espere 5 s antes de registrar.
+   Repita tres veces por modo y alterne el orden para reducir deriva termica.
+6. Antes de cada cambio confirme que las muestras responden a la luz y al
+   tapado. No incluya en la medida el instante de la pulsacion.
 
 | Modo | Periodo (ms) | Luz/posicion | Repeticion | Rango DMM | I media visible | I min-max visible | Lectura KY-018 OK | Notas |
 |---|---:|---|---:|---|---:|---:|---|---|
-| referencia | 5000 | | 1 | | | | | |
-| referencia | 5000 | | 2 | | | | | |
-| referencia | 5000 | | 3 | | | | | |
-| respuesta | 5000 | | 1 | | | | | |
-| respuesta | 5000 | | 2 | | | | | |
-| respuesta | 5000 | | 3 | | | | | |
-| ahorro | 5000 | | 1 | | | | | |
-| ahorro | 5000 | | 2 | | | | | |
-| ahorro | 5000 | | 3 | | | | | |
+| referencia | 1000 | | 1 | | | | | |
+| referencia | 1000 | | 2 | | | | | |
+| referencia | 1000 | | 3 | | | | | |
+| respuesta | 1000 | | 1 | | | | | |
+| respuesta | 1000 | | 2 | | | | | |
+| respuesta | 1000 | | 3 | | | | | |
+| ahorro | 1000 | | 1 | | | | | |
+| ahorro | 1000 | | 2 | | | | | |
+| ahorro | 1000 | | 3 | | | | | |
 
 Use la media de las tres repeticiones. Sin inventar datos:
 
@@ -241,24 +234,23 @@ Si tension e intervalo son iguales, el porcentaje de corriente media es tambien
 el porcentaje aproximado de energia por unidad de tiempo. No presente precision
 mayor que la resolucion y estabilidad observadas del multimetro.
 
-## 7. Si STOP0 y STOP2 no se distinguen
+## 6. Si STOP0 y STOP2 no se distinguen
 
 No fuerce una conclusion. La diferencia puede quedar oculta por la resolucion
 del instrumento, la resistencia interna del amperimetro, una sesion de debug,
 los consumos base del dominio RF/temporizador o los promedios lentos del DMM.
 Informe que el montaje no resolvio esa diferencia.
 
-La variante `saving-fast` mantiene exactamente la politica `saving` y el mismo
-trabajo por muestra, pero cambia el periodo de 5000 a 100 ms:
+Para comparar frecuencias, pulse `B3/SW3` para seleccionar ahorro y cambie
+temporalmente en `prj.conf`:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-profile.ps1 -Profile saving-fast
+```ini
+CONFIG_DEMO_SAMPLE_INTERVAL_MS=100
 ```
 
-Compare `saving` con `saving-fast` en una tabla aparte. En ese experimento la
-variable independiente es la **frecuencia de muestreo**, no la politica de
-estados de energia. El aumento esperado del promedio procede de ejecutar el
-mismo trabajo activo mas veces por segundo.
+Compare ese resultado con ahorro a 1000 ms en una tabla aparte y restaure
+despues el valor original. En ese experimento la variable independiente es la
+**frecuencia de muestreo**, no la politica de estados de energia.
 
 ## Fuentes tecnicas
 
