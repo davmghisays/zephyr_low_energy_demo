@@ -92,7 +92,7 @@ static void button_pressed(const struct device *port,
 	ARG_UNUSED(port);
 	ARG_UNUSED(pins);
 
-	/* La interrupcion solo guarda el boton pulsado y solicita el trabajo. */
+	/* La interrupcion sol3o guarda el boton pulsado y solicita el trabajo. */
 	for (int i = 0; i < BUTTON_COUNT; i++) {
 		if (callback == &button_callbacks[i]) {
 			atomic_set(&requested_mode, i);
