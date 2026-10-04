@@ -11,9 +11,9 @@
 #include <zephyr/sys/printk.h>
 
 /*
- * La aplicacion lee el KY-018 cada segundo y muestra el resultado por serie.
- * Los botones solo cambian la restriccion de energia: no cambian el intervalo,
- * el trabajo del ADC ni activan radio, LED o comunicaciones inalambricas.
+ * La aplicacion lee el KY-018 periodicamente y muestra el resultado por serie.
+ * Los botones solo cambian la politica de energia. La lectura, el intervalo y
+ * los mensajes son iguales en los tres modos.
  */
 #define ADC_NODE DT_PATH(zephyr_user)
 #define READS_PER_CYCLE 8
@@ -34,6 +34,7 @@ static const struct gpio_dt_spec buttons[BUTTON_COUNT] = {
 	GPIO_DT_SPEC_GET(DT_ALIAS(sw2), gpios),
 };
 
+/* Estos dos dispositivos se obtienen del Devicetree de la placa. */
 static const struct adc_dt_spec light_adc = ADC_DT_SPEC_GET(ADC_NODE);
 static const struct device *const console_uart =
 	DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
@@ -46,7 +47,8 @@ static struct pm_policy_latency_request latency_request;
 static struct k_work mode_work;
 
 /* La interrupcion escribe requested_mode y el work de Zephyr lo lee.
- * atomic_t permite compartir ese valor sin una lectura/escritura a medias.
+ * atomic_t permite compartir el valor de forma segura entre ambos contextos.
+ * El work evita cambiar la politica o imprimir dentro de la interrupcion.
  */
 static atomic_t requested_mode = MODE_SAVING;
 static enum energy_mode current_mode = MODE_NONE;
@@ -129,6 +131,29 @@ static int setup_buttons(void)
 	return 0;
 }
 
+static int setup_devices(void)
+{
+	if (!adc_is_ready_dt(&light_adc) ||
+	    adc_channel_setup_dt(&light_adc) != 0) {
+		return -1;
+	}
+
+	/* enable() entrega el ADC a Runtime PM y lo deja suspendido hasta get(). */
+	if (pm_device_runtime_enable(light_adc.dev) != 0) {
+		return -1;
+	}
+
+	if (!device_is_ready(console_uart) ||
+	    pm_device_runtime_enable(console_uart) != 0) {
+		return -1;
+	}
+
+	/* No hace falta rodear cada printk con get/put. La consola de Zephyr
+	 * reactiva la UART al transmitir y solicita su suspension al terminar.
+	 */
+	return 0;
+}
+
 static int read_light(uint16_t *average)
 {
 	uint16_t sample;
@@ -145,7 +170,7 @@ static int read_light(uint16_t *average)
 		return err;
 	}
 
-	/* El ADC solo permanece activo mientras se realizan las conversiones. */
+	/* get() despierta el ADC antes de usarlo. */
 	err = pm_device_runtime_get(light_adc.dev);
 	if (err != 0) {
 		return err;
@@ -160,7 +185,7 @@ static int read_light(uint16_t *average)
 		sum += sample;
 	}
 
-	/* Cada get debe terminar con un put, incluso si una lectura falla. */
+	/* put() permite volver a suspenderlo. Tambien debe ejecutarse si hubo error. */
 	int pm_err = pm_device_runtime_put(light_adc.dev);
 
 	if (err != 0) {
@@ -180,21 +205,8 @@ int main(void)
 	int64_t next_sample = k_uptime_get();
 	uint32_t sample_count = 0;
 
-	if (!adc_is_ready_dt(&light_adc) || adc_channel_setup_dt(&light_adc) != 0) {
-		printk("Error al iniciar el ADC\n");
-		return 0;
-	}
-
-	/* Habilitar Runtime PM suspende el ADC hasta el primer get(). */
-	if (pm_device_runtime_enable(light_adc.dev) != 0) {
-		printk("Error al activar Runtime PM del ADC\n");
-		return 0;
-	}
-
-	/* printk reactiva la UART y la suspende al terminar cada mensaje. */
-	if (!device_is_ready(console_uart) ||
-	    pm_device_runtime_enable(console_uart) != 0) {
-		printk("Error al activar Runtime PM de la UART\n");
+	if (setup_devices() != 0) {
+		printk("Error al iniciar ADC, UART o Runtime PM\n");
 		return 0;
 	}
 
@@ -228,8 +240,9 @@ int main(void)
 
 		next_sample += CONFIG_DEMO_SAMPLE_INTERVAL_MS;
 
-		/* Mientras main duerme no hay espera activa. El hilo idle puede aplicar
-		 * la politica PM, y la fecha absoluta mantiene el periodo de muestreo.
+		/* k_sleep deja el hilo inactivo; no es un bucle de espera. Mientras no
+		 * haya trabajo, Zephyr puede llevar el sistema al estado permitido por
+		 * el modo actual. La fecha absoluta evita acumular retrasos entre ciclos.
 		 */
 		k_sleep(K_TIMEOUT_ABS_MS(next_sample));
 	}
