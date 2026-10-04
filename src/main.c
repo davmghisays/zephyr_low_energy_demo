@@ -1,5 +1,6 @@
 #include <stdint.h>
 
+#include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/gpio.h>
@@ -34,6 +35,8 @@ static const struct gpio_dt_spec buttons[BUTTON_COUNT] = {
 };
 
 static const struct adc_dt_spec light_adc = ADC_DT_SPEC_GET(ADC_NODE);
+static const struct device *const console_uart =
+	DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 
 /* Cada boton necesita su callback. La peticion de latencia se conserva para
  * poder retirarla al abandonar el modo de respuesta rapida.
@@ -188,6 +191,13 @@ int main(void)
 		return 0;
 	}
 
+	/* printk reactiva la UART y la suspende al terminar cada mensaje. */
+	if (!device_is_ready(console_uart) ||
+	    pm_device_runtime_enable(console_uart) != 0) {
+		printk("Error al activar Runtime PM de la UART\n");
+		return 0;
+	}
+
 	/* El firmware siempre empieza sin restricciones, en modo ahorro. */
 	k_work_init(&mode_work, change_mode);
 	set_energy_mode(MODE_SAVING);
@@ -198,7 +208,7 @@ int main(void)
 	}
 
 	printk("B1: referencia; B2: respuesta rapida; B3: ahorro\n");
-	printk("Runtime PM del ADC: activo\n");
+	printk("Runtime PM: ADC y UART activos\n");
 	printk("Intervalo: %d ms; ADC: A0/PB1\n",
 	       CONFIG_DEMO_SAMPLE_INTERVAL_MS);
 

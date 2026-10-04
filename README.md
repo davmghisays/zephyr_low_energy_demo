@@ -8,10 +8,9 @@ No utiliza BLE, LoRa, radio ni LED. En todos los modos se realizan las mismas
 ocho conversiones ADC cada 1000 ms. Lo unico que cambia es la restriccion que
 la aplicacion entrega a la politica de energia de Zephyr.
 
-Esta rama tambien habilita Runtime PM exclusivamente para el ADC. El ADC se
-reactiva antes de las ocho conversiones y vuelve a suspenderse al terminarlas.
-La UART de la consola no usa Runtime PM y continua gestionada junto con el
-sistema al entrar y salir de STOP.
+Esta rama tambien habilita Runtime PM para el ADC y la UART. El ADC se reactiva
+antes de las ocho conversiones y vuelve a suspenderse al terminarlas. La UART
+se reactiva al imprimir y se suspende despues del ultimo caracter.
 
 ## Cableado
 
@@ -47,7 +46,7 @@ Los valores de latencia de STOP0, STOP1 y STOP2 incluidos en el overlay son
 metadata experimental para esta comparacion. No representan una medicion de
 latencia extremo a extremo.
 
-## Runtime PM del ADC
+## Runtime PM del ADC y la UART
 
 Durante cada ciclo ocurre lo siguiente:
 
@@ -65,6 +64,11 @@ incluso en referencia, donde los estados STOP estan bloqueados.
 `CONFIG_PM_DEVICE_SYSTEM_MANAGED` se mantiene activo para los demas
 perifericos. Zephyr no vuelve a suspender el ADC al entrar en STOP porque ya
 esta gestionado por Runtime PM.
+
+La consola de Zephyr gestiona la UART automaticamente. Cada caracter de
+`printk` solicita el dispositivo y la suspension se programa 1 ms despues. Si
+llega otro caracter antes de ese tiempo, la suspension se pospone. De esta
+forma se envia la linea completa y la UART queda apagada entre mensajes.
 
 ## Compilar y flashear
 
@@ -89,7 +93,7 @@ El monitor serie utiliza `115200 8N1`. Una ejecucion normal se ve asi:
 ```text
 Modo: ahorro
 B1: referencia; B2: respuesta rapida; B3: ahorro
-Runtime PM del ADC: activo
+Runtime PM: ADC y UART activos
 Intervalo: 1000 ms; ADC: A0/PB1
 Muestra 1: 602
 ```
@@ -121,6 +125,10 @@ Esta variante debe compararse con la rama principal como un experimento
 distinto. Runtime PM puede reducir el consumo de referencia y, por tanto,
 reducir la diferencia visible entre los tres modos. No se debe atribuir ese
 cambio solamente a la seleccion de STOP0, STOP1 o STOP2.
+
+En ahorro, la reduccion adicional puede ser pequena porque System-managed ya
+suspendia la UART durante STOP. El efecto suele ser mas visible en referencia,
+donde la CPU no entra en STOP pero Runtime PM si puede apagar los perifericos.
 
 Un multimetro convencional muestra principalmente un promedio y puede no
 capturar los pulsos breves de actividad del ADC y la UART.
