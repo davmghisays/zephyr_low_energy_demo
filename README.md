@@ -1,4 +1,4 @@
-# Demo de energia con Zephyr
+# Demo de energia con Zephyr - variante Runtime PM
 
 Demo para la `NUCLEO-WL55JC1` y un fotoresistor `KY-018`. Lee la luz por el
 ADC, muestra el resultado por el puerto serie y permite cambiar la politica de
@@ -7,6 +7,11 @@ energia con los tres botones de la placa.
 No utiliza BLE, LoRa, radio ni LED. En todos los modos se realizan las mismas
 ocho conversiones ADC cada 1000 ms. Lo unico que cambia es la restriccion que
 la aplicacion entrega a la politica de energia de Zephyr.
+
+Esta rama tambien habilita Runtime PM exclusivamente para el ADC. El ADC se
+reactiva antes de las ocho conversiones y vuelve a suspenderse al terminarlas.
+La UART de la consola no usa Runtime PM y continua gestionada junto con el
+sistema al entrar y salir de STOP.
 
 ## Cableado
 
@@ -42,6 +47,25 @@ Los valores de latencia de STOP0, STOP1 y STOP2 incluidos en el overlay son
 metadata experimental para esta comparacion. No representan una medicion de
 latencia extremo a extremo.
 
+## Runtime PM del ADC
+
+Durante cada ciclo ocurre lo siguiente:
+
+```text
+pm_device_runtime_get(ADC)
+ocho conversiones
+pm_device_runtime_put(ADC)
+k_sleep()
+```
+
+El `get` reactiva el ADC y aumenta su contador de uso. El `put` reduce el
+contador a cero y lo suspende. Por eso el ADC permanece apagado entre muestras,
+incluso en referencia, donde los estados STOP estan bloqueados.
+
+`CONFIG_PM_DEVICE_SYSTEM_MANAGED` se mantiene activo para los demas
+perifericos. Zephyr no vuelve a suspender el ADC al entrar en STOP porque ya
+esta gestionado por Runtime PM.
+
 ## Compilar y flashear
 
 Entorno utilizado:
@@ -65,6 +89,7 @@ El monitor serie utiliza `115200 8N1`. Una ejecucion normal se ve asi:
 ```text
 Modo: ahorro
 B1: referencia; B2: respuesta rapida; B3: ahorro
+Runtime PM del ADC: activo
 Intervalo: 1000 ms; ADC: A0/PB1
 Muestra 1: 602
 ```
@@ -91,6 +116,11 @@ Para comparar modos, pulse y suelte el boton correspondiente y espere unos
 segundos antes de leer el multimetro. La consola permanece activa en todos los
 modos, por lo que los resultados son comparaciones relativas y no el consumo
 minimo absoluto del microcontrolador.
+
+Esta variante debe compararse con la rama principal como un experimento
+distinto. Runtime PM puede reducir el consumo de referencia y, por tanto,
+reducir la diferencia visible entre los tres modos. No se debe atribuir ese
+cambio solamente a la seleccion de STOP0, STOP1 o STOP2.
 
 Un multimetro convencional muestra principalmente un promedio y puede no
 capturar los pulsos breves de actividad del ADC y la UART.

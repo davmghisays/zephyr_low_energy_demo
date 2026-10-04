@@ -4,6 +4,7 @@
 #include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/kernel.h>
+#include <zephyr/pm/device_runtime.h>
 #include <zephyr/pm/policy.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/printk.h>
@@ -141,13 +142,29 @@ static int read_light(uint16_t *average)
 		return err;
 	}
 
+	/* El ADC solo permanece activo mientras se realizan las conversiones. */
+	err = pm_device_runtime_get(light_adc.dev);
+	if (err != 0) {
+		return err;
+	}
+
 	/* Todos los modos realizan las mismas ocho conversiones. */
 	for (int i = 0; i < READS_PER_CYCLE; i++) {
 		err = adc_read_dt(&light_adc, &sequence);
 		if (err != 0) {
-			return err;
+			break;
 		}
 		sum += sample;
+	}
+
+	/* Cada get debe terminar con un put, incluso si una lectura falla. */
+	int pm_err = pm_device_runtime_put(light_adc.dev);
+
+	if (err != 0) {
+		return err;
+	}
+	if (pm_err != 0) {
+		return pm_err;
 	}
 
 	*average = sum / READS_PER_CYCLE;
@@ -165,6 +182,12 @@ int main(void)
 		return 0;
 	}
 
+	/* Habilitar Runtime PM suspende el ADC hasta el primer get(). */
+	if (pm_device_runtime_enable(light_adc.dev) != 0) {
+		printk("Error al activar Runtime PM del ADC\n");
+		return 0;
+	}
+
 	/* El firmware siempre empieza sin restricciones, en modo ahorro. */
 	k_work_init(&mode_work, change_mode);
 	set_energy_mode(MODE_SAVING);
@@ -175,6 +198,7 @@ int main(void)
 	}
 
 	printk("B1: referencia; B2: respuesta rapida; B3: ahorro\n");
+	printk("Runtime PM del ADC: activo\n");
 	printk("Intervalo: %d ms; ADC: A0/PB1\n",
 	       CONFIG_DEMO_SAMPLE_INTERVAL_MS);
 
