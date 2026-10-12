@@ -1,5 +1,5 @@
 param(
-    [switch]$SensorAlwaysOn
+    [switch]$Reference
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,8 +20,8 @@ Write-Host "Build: $BuildDir"
 Push-Location $ZephyrDir
 try {
     $CmakeArgs = @("-DDTC_OVERLAY_FILE=boards/nucleo_wl55jc.overlay")
-    if ($SensorAlwaysOn) {
-        $CmakeArgs += "-DCONFIG_DEMO_SENSOR_POWER_ALWAYS_ON=y"
+    if ($Reference) {
+        $CmakeArgs += "-DEXTRA_CONF_FILE=confs/prj_sensor_always_on.conf"
     }
 
     & $WestExe build -p always -b nucleo_wl55jc $ProjectDir -d $BuildDir -- $CmakeArgs

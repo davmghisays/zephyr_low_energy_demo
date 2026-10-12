@@ -69,10 +69,11 @@ El `get` reactiva el ADC y aumenta su contador de uso. El `put` reduce el
 contador a cero y lo suspende. Por eso el ADC permanece apagado entre muestras,
 incluso en referencia, donde los estados STOP estan bloqueados.
 
-El valor inicial de `CONFIG_DEMO_SENSOR_SETTLE_MS` es 5 ms. Debe aumentarse si
-las lecturas cambian al comparar con una espera mayor; puede reducirse despues
-de comprobar experimentalmente que el modulo se estabiliza. Para la referencia
-de consumo, active `CONFIG_DEMO_SENSOR_POWER_ALWAYS_ON=y`: mantiene el mismo
+El valor inicial de `CONFIG_DEMO_SENSOR_SETTLE_MS` es 5 ms y la alimentacion
+conmutada se declara explicitamente en `prj.conf`. Debe aumentarse si las
+lecturas cambian al comparar con una espera mayor; puede reducirse despues de
+comprobar experimentalmente que el modulo se estabiliza. Para la referencia de
+consumo, el fragmento `confs/prj_sensor_always_on.conf` mantiene el mismo
 sensor alimentado desde D4/PB5, pero permanentemente, de modo que ambas
 mediciones de JP1 incluyen su corriente.
 
@@ -101,10 +102,10 @@ Desde PowerShell, en la raiz del proyecto:
 ```
 
 Para el primer punto de comparacion de JP1 (sensor siempre alimentado, pero
-desde D4/PB5), construya y flashee con:
+desde D4/PB5), construya y flashee con el fragmento de referencia:
 
 ```powershell
-.\scripts\build.ps1 -SensorAlwaysOn
+.\scripts\build.ps1 -Reference
 .\scripts\flash.ps1
 ```
 
@@ -161,8 +162,8 @@ donde la CPU no entra en STOP pero Runtime PM si puede apagar los perifericos.
 Un multimetro convencional muestra principalmente un promedio y puede no
 capturar los pulsos breves de actividad del ADC, la UART y la alimentacion del
 sensor. Para una comparacion valida, mida primero con
-`CONFIG_DEMO_SENSOR_POWER_ALWAYS_ON=y` y despues con la opcion desactivada,
-manteniendo el resto de la configuracion y el cableado sin cambios.
+`confs/prj_sensor_always_on.conf` y despues con `prj.conf`, manteniendo el
+resto de la configuracion y el cableado sin cambios.
 
 ## Archivos principales
 
