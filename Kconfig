@@ -26,6 +26,17 @@ config DEMO_SENSOR_POWER_ALWAYS_ON
 	  corriente media en JP1 con y sin conmutacion, sin mover la alimentacion
 	  del sensor fuera del punto de medida.
 
+config DEMO_RUNTIME_PM_DEVICES
+	bool "Gestionar ADC y UART con Runtime PM"
+	default y
+	help
+	  Cuando esta activa, la aplicacion entrega ADC y UART a Runtime PM. El
+	  ADC solo se reactiva durante la adquisicion y la consola suspende la UART
+	  tras transmitir. Al desactivarla, ambos perifericos se usan directamente,
+	  activos entre adquisiciones y sin ciclos get/put. Durante el arranque se
+	  realiza una unica transicion suspend/resume para dejarlos inicializados en
+	  un estado conocido, y Runtime PM queda desactivado inmediatamente despues.
+
 config DEMO_RESPONSE_LATENCY_US
 	int "Latencia maxima solicitada en modo respuesta (us)"
 	range 1 1000000

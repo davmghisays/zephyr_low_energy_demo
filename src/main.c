@@ -55,6 +55,25 @@ static struct k_work mode_work;
 static atomic_t requested_mode = MODE_SAVING;
 static enum energy_mode current_mode = MODE_NONE;
 
+#if !defined(CONFIG_DEMO_RUNTIME_PM_DEVICES)
+/*
+ * En STM32WL, pasar una vez por suspend/resume deja el periferico en el mismo
+ * estado inicial que la variante Runtime PM que ya esta validada. disable()
+ * retira inmediatamente el dispositivo de Runtime PM y lo deja activo, por lo
+ * que no hay transiciones get/put ni apagados entre adquisiciones.
+ */
+static int prepare_direct_device(const struct device *dev)
+{
+	int err = pm_device_runtime_enable(dev);
+
+	if (err != 0) {
+		return err;
+	}
+
+	return pm_device_runtime_disable(dev);
+}
+#endif
+
 static void set_energy_mode(enum energy_mode mode)
 {
 	if (mode == current_mode) {
@@ -140,22 +159,24 @@ static int setup_devices(void)
 		return -1;
 	}
 
-	/* D4/PB5 alimenta el KY-018 solo durante la adquisicion. */
+	/* D4/PB5 alimenta el KY-018 segun el perfil de energia seleccionado. */
 	if (!gpio_is_ready_dt(&sensor_power) ||
 	    gpio_pin_configure_dt(&sensor_power, GPIO_OUTPUT_INACTIVE) != 0) {
 		return -1;
 	}
 
 #if defined(CONFIG_DEMO_SENSOR_POWER_ALWAYS_ON)
-	/* Configuracion de referencia: el sensor tambien queda detras de JP1,
-	 * pero no se interrumpe entre muestras.
+	/* El sensor permanece detras de JP1 y no se interrumpe entre muestras.
 	 */
 	if (gpio_pin_set_dt(&sensor_power, 1) != 0) {
 		return -1;
 	}
 #endif
 
-	/* enable() entrega el ADC a Runtime PM y lo deja suspendido hasta get(). */
+	/* La variante gestionada entrega ADC y UART a Runtime PM. La directa los
+	 * normaliza una vez durante el arranque y los deja activos permanentemente.
+	 */
+#if defined(CONFIG_DEMO_RUNTIME_PM_DEVICES)
 	if (pm_device_runtime_enable(light_adc.dev) != 0) {
 		return -1;
 	}
@@ -164,10 +185,13 @@ static int setup_devices(void)
 	    pm_device_runtime_enable(console_uart) != 0) {
 		return -1;
 	}
-
-	/* No hace falta rodear cada printk con get/put. La consola de Zephyr
-	 * reactiva la UART al transmitir y solicita su suspension al terminar.
-	 */
+#else
+	if (!device_is_ready(console_uart) ||
+	    prepare_direct_device(light_adc.dev) != 0 ||
+	    prepare_direct_device(console_uart) != 0) {
+		return -1;
+	}
+#endif
 	return 0;
 }
 
@@ -196,6 +220,24 @@ static int sensor_power_disable(void)
 #endif
 }
 
+static int adc_power_get(void)
+{
+#if defined(CONFIG_DEMO_RUNTIME_PM_DEVICES)
+	return pm_device_runtime_get(light_adc.dev);
+#else
+	return 0;
+#endif
+}
+
+static int adc_power_put(void)
+{
+#if defined(CONFIG_DEMO_RUNTIME_PM_DEVICES)
+	return pm_device_runtime_put(light_adc.dev);
+#else
+	return 0;
+#endif
+}
+
 static int read_light(uint16_t *average)
 {
 	uint16_t sample;
@@ -218,8 +260,8 @@ static int read_light(uint16_t *average)
 		return err;
 	}
 
-	/* get() despierta el ADC antes de usarlo. */
-	err = pm_device_runtime_get(light_adc.dev);
+	/* En el perfil gestionado se reactiva el ADC; en directo es un no-op. */
+	err = adc_power_get();
 	if (err != 0) {
 		(void)sensor_power_disable();
 		return err;
@@ -234,8 +276,8 @@ static int read_light(uint16_t *average)
 		sum += sample;
 	}
 
-	/* put() permite volver a suspenderlo. Tambien debe ejecutarse si hubo error. */
-	int pm_err = pm_device_runtime_put(light_adc.dev);
+	/* La liberacion PM debe ejecutarse incluso si una conversion fallo. */
+	int pm_err = adc_power_put();
 	int power_err = sensor_power_disable();
 
 	if (err != 0) {
@@ -259,7 +301,7 @@ int main(void)
 	uint32_t sample_count = 0;
 
 	if (setup_devices() != 0) {
-		printk("Error al iniciar ADC, UART o Runtime PM\n");
+		printk("Error al iniciar ADC, UART o alimentacion del sensor\n");
 		return 0;
 	}
 
@@ -273,7 +315,23 @@ int main(void)
 	}
 
 	printk("B1: referencia; B2: respuesta rapida; B3: ahorro\n");
-	printk("Runtime PM habilitado para ADC y UART\n");
+#if defined(CONFIG_DEMO_RUNTIME_PM_DEVICES)
+	printk("ADC y UART gestionados por Runtime PM\n");
+#else
+	printk("ADC y UART directos, sin Runtime PM de aplicacion\n");
+#endif
+#if !defined(CONFIG_PM)
+	printk("PM del sistema desactivado; no se entra en STOP\n");
+#elif defined(CONFIG_PM_DEVICE_SYSTEM_MANAGED)
+	printk("System-managed activo para dispositivos\n");
+#else
+	printk("System-managed desactivado para dispositivos\n");
+#endif
+#if defined(CONFIG_DEMO_SENSOR_POWER_ALWAYS_ON)
+	printk("KY-018 alimentado permanentemente\n");
+#else
+	printk("KY-018 alimentado solo durante la adquisicion\n");
+#endif
 	printk("Intervalo: %d ms; ADC: A0/PB1; KY-018: D4/PB5\n",
 	       CONFIG_DEMO_SAMPLE_INTERVAL_MS);
 	printk("Estabilizacion del sensor: %d ms\n",

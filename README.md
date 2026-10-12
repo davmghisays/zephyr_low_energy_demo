@@ -8,14 +8,15 @@ No utiliza BLE, LoRa, radio ni LEDs. En todos los modos se realizan las mismas
 ocho conversiones ADC cada 1000 ms. Lo unico que cambia es la restriccion que
 la aplicacion entrega a la politica de energia de Zephyr.
 
-Esta rama tambien habilita Runtime PM para el ADC y la UART. El ADC se reactiva
-antes de las ocho conversiones y vuelve a suspenderse al terminarlas. La UART
-se reactiva al imprimir y se suspende despues del ultimo caracter.
+Esta rama compara cinco perfiles: sin gestion energetica, solo System-managed,
+System-managed con conmutacion del sensor, Runtime PM mas System-managed y la
+misma combinacion con alimentacion conmutada del sensor.
 
 La rama `experiment/gpio-sensor-power` anade una prueba: el KY-018 se alimenta
-desde Arduino `D4` (`PB5`) en lugar de `3V3`. El firmware enciende ese GPIO
-solo durante la adquisicion, por lo que su corriente pasa a formar parte de la
-medida `I_SoC` de JP1.
+desde Arduino `D4` (`PB5`) en lugar de `3V3`, por lo que su corriente pasa a
+formar parte de la medida `I_SoC` de JP1. `prj.conf` decide si ese GPIO queda
+activo o se enciende solo durante la adquisicion; los perfiles pueden
+sobrescribir esa eleccion.
 
 ## Cableado
 
@@ -51,9 +52,52 @@ Los valores de latencia de STOP0, STOP1 y STOP2 incluidos en el overlay son
 metadata experimental para esta comparacion. No representan una medicion de
 latencia extremo a extremo.
 
-## Runtime PM del ADC y la UART
+## Perfiles de energia
 
-Durante cada ciclo ocurre lo siguiente:
+Todos los perfiles hacen las mismas ocho conversiones y mantienen la misma
+salida serie. Solo acumulan mecanismos de ahorro:
+
+| Perfil | PM del sistema | Sensor KY-018 | ADC y UART | System-managed |
+|---|---|---|---|---|
+| `high-energy` | Desactivado | Siempre encendido | Directos, sin Runtime PM | Desactivado |
+| `system-managed` | Activo | Siempre encendido | Directos, sin Runtime PM | Activo |
+| `sensor-managed` | Activo | Solo durante la adquisicion | Directos, sin Runtime PM | Activo |
+| `runtime-system` | Activo | Siempre encendido | Gestionados por Runtime PM | Activo |
+| `low-energy` | Activo | Solo durante la adquisicion | Gestionados por Runtime PM | Activo |
+
+`high-energy` desactiva `CONFIG_PM`, deja Runtime PM desactivado para ADC/UART y
+desactiva `CONFIG_PM_DEVICE_SYSTEM_MANAGED`. El MCU no entra en STOP y ningun
+mecanismo de la demo suspende los perifericos durante la ejecucion. Al arrancar
+se hace una unica secuencia suspend/resume para dejar ambos perifericos en un
+estado activo conocido; a continuacion se retiran de Runtime PM y permanecen
+activos.
+
+Con `system-managed`, ADC/UART no reciben transiciones Runtime PM desde la
+aplicacion; System-managed los prepara al entrar y salir de STOP. Este efecto
+solo ocurre en modos que permiten STOP: B1 lo bloquea.
+
+`sensor-managed` conserva esas mismas condiciones para MCU, ADC y UART, pero
+apaga D4/PB5 entre adquisiciones. Por tanto, la diferencia de corriente media
+frente a `system-managed`, con el mismo boton seleccionado, aisla el efecto de
+conmutar la alimentacion del KY-018, incluyendo el breve coste de accionar el
+GPIO. Ambas medidas deben realizarse con la misma iluminacion, porque la
+corriente del divisor depende de la resistencia de la LDR.
+
+Con `runtime-system`, la aplicacion entrega ADC y UART a Runtime PM y deja
+System-managed para los demas dispositivos durante STOP. Con `low-energy`, se
+anade ademas el corte de D4/PB5 tras cada adquisicion.
+
+En `sensor-managed`, un ciclo de adquisicion es:
+
+```text
+activar D4/PB5
+esperar CONFIG_DEMO_SENSOR_SETTLE_MS
+ocho conversiones con el ADC activo
+desactivar D4/PB5
+k_sleep()
+```
+
+En `low-energy`, el ciclo acumula ademas Runtime PM:
 
 ```text
 activar D4/PB5
@@ -65,26 +109,29 @@ desactivar D4/PB5
 k_sleep()
 ```
 
-El `get` reactiva el ADC y aumenta su contador de uso. El `put` reduce el
-contador a cero y lo suspende. Por eso el ADC permanece apagado entre muestras,
-incluso en referencia, donde los estados STOP estan bloqueados.
+Con `CONFIG_DEMO_RUNTIME_PM_DEVICES=y`, el `get` reactiva el ADC y aumenta su
+contador de uso. El `put` reduce el contador a cero y lo suspende. La consola
+gestiona la UART del mismo modo, programando su suspension 1 ms despues del
+ultimo caracter.
 
-El valor inicial de `CONFIG_DEMO_SENSOR_SETTLE_MS` es 5 ms y la alimentacion
-conmutada se declara explicitamente en `prj.conf`. Debe aumentarse si las
-lecturas cambian al comparar con una espera mayor; puede reducirse despues de
-comprobar experimentalmente que el modulo se estabiliza. Para la referencia de
-consumo, el fragmento `confs/prj_sensor_always_on.conf` mantiene el mismo
-sensor alimentado desde D4/PB5, pero permanentemente, de modo que ambas
-mediciones de JP1 incluyen su corriente.
+Con `CONFIG_DEMO_RUNTIME_PM_DEVICES=n`, la aplicacion usa ADC y UART
+directamente y no ejecuta `get/put` entre muestras. La unica secuencia
+`enable/disable` ocurre durante el arranque para forzar la inicializacion
+suspend/resume requerida por estos drivers; al terminar, Runtime PM queda
+desactivado y ambos perifericos permanecen activos. Ese transitorio de arranque
+no forma parte de la medicion estacionaria en JP1.
 
-`CONFIG_PM_DEVICE_SYSTEM_MANAGED` se mantiene activo para los demas
-perifericos. Zephyr no vuelve a suspender el ADC al entrar en STOP porque ya
-esta gestionado por Runtime PM.
+El valor inicial de `CONFIG_DEMO_SENSOR_SETTLE_MS` es 5 ms. Debe aumentarse si
+las lecturas cambian al comparar con una espera mayor; puede reducirse despues
+de comprobar experimentalmente que el modulo se estabiliza.
+`CONFIG_DEMO_SENSOR_POWER_ALWAYS_ON` controla la alimentacion del sensor. Los
+perfiles `sensor-managed` y `low-energy` la desactivan entre adquisiciones; los
+otros tres la mantienen activa.
 
-La consola de Zephyr gestiona la UART automaticamente. Cada caracter de
-`printk` solicita el dispositivo y la suspension se programa 1 ms despues. Si
-llega otro caracter antes de ese tiempo, la suspension se pospone. De esta
-forma se envia la linea completa y la UART queda apagada entre mensajes.
+Para medir el consumo mas alto del demo, seleccione `high-energy`; este perfil
+ya desactiva el PM del sistema y no entra en STOP. Para comparar las estrategias
+de ahorro, use B3 en los otros perfiles y mantenga el cableado y la actividad de
+consola sin cambios.
 
 ## Compilar y flashear
 
@@ -94,34 +141,43 @@ Entorno utilizado:
 - Board `nucleo_wl55jc`.
 - Zephyr SDK `1.0.1`.
 
-Desde PowerShell, en la raiz del proyecto:
+Desde PowerShell, en la raiz del proyecto, seleccione uno de los perfiles:
 
 ```powershell
-.\scripts\build.ps1
+# Sin gestion de energia del sistema ni de dispositivos
+.\scripts\build.ps1 -Profile high-energy
+
+# System-managed + conmutacion de la alimentacion del sensor
+.\scripts\build.ps1 -Profile sensor-managed
+
+# Solo System-managed
+.\scripts\build.ps1 -Profile system-managed
+
+# Runtime PM + System-managed
+.\scripts\build.ps1 -Profile runtime-system
+
+# Runtime PM + System-managed + corte de alimentacion del sensor
+.\scripts\build.ps1 -Profile low-energy
+
+# Tras seleccionar uno de los perfiles anteriores
 .\scripts\flash.ps1
 ```
 
-Para el primer punto de comparacion de JP1 (sensor siempre alimentado, pero
-desde D4/PB5), construya y flashee con el fragmento de referencia:
+Sin parametro, `build.ps1` selecciona `low-energy`. Los perfiles solo
+seleccionan archivos `.conf`; no inyectan opciones Kconfig desde el script.
 
-```powershell
-.\scripts\build.ps1 -Reference
-.\scripts\flash.ps1
-```
-
-Vuelva a ejecutar `build.ps1` sin parametros y flashee de nuevo para la prueba
-con alimentacion conmutada.
-
-Tambien estan disponibles las tareas `Demo: Build`, `Demo: Flash` y
-`Serial Monitor` en VS Code.
+En VS Code estan disponibles las cinco tareas `Demo: Build (...)`, una por
+perfil, ademas de `Demo: Flash` y `Serial Monitor`.
 
 El monitor serie utiliza `115200 8N1`. Una ejecucion normal se ve asi:
 
 ```text
 Modo: ahorro
 B1: referencia; B2: respuesta rapida; B3: ahorro
-Runtime PM: ADC y UART activos
-Intervalo: 1000 ms; ADC: A0/PB1
+ADC y UART gestionados por Runtime PM
+System-managed activo para dispositivos
+KY-018 alimentado solo durante la adquisicion
+Intervalo: 1000 ms; ADC: A0/PB1; KY-018: D4/PB5
 Muestra 1: 602
 ```
 
@@ -155,15 +211,11 @@ distinto. Runtime PM puede reducir el consumo de referencia y, por tanto,
 reducir la diferencia visible entre los tres modos. No se debe atribuir ese
 cambio solamente a la seleccion de STOP0, STOP1 o STOP2.
 
-En ahorro, la reduccion adicional puede ser pequena porque System-managed ya
-suspendia la UART durante STOP. El efecto suele ser mas visible en referencia,
-donde la CPU no entra en STOP pero Runtime PM si puede apagar los perifericos.
-
 Un multimetro convencional muestra principalmente un promedio y puede no
 capturar los pulsos breves de actividad del ADC, la UART y la alimentacion del
-sensor. Para una comparacion valida, mida primero con
-`confs/prj_sensor_always_on.conf` y despues con `prj.conf`, manteniendo el
-resto de la configuracion y el cableado sin cambios.
+sensor. Para comparar cada escalon, mantenga constantes el modo B3, el
+cableado y la actividad de consola. Reserve B1 para el limite superior de
+`high-energy`.
 
 ## Archivos principales
 
