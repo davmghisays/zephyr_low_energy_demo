@@ -34,15 +34,10 @@ static const struct gpio_dt_spec buttons[BUTTON_COUNT] = {
 	GPIO_DT_SPEC_GET(DT_ALIAS(sw2), gpios),
 };
 
-// Declara y habilita los leds que vienen en la placa según como fueron aliased en el overlay
-static const struct gpio_dt_spec leds[BUTTON_COUNT] = {
-	GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios),
-	GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios),
-	GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios),
-};
-
 /* Estos dos dispositivos se obtienen del Devicetree de la placa. */
 static const struct adc_dt_spec light_adc = ADC_DT_SPEC_GET(ADC_NODE);
+static const struct gpio_dt_spec sensor_power =
+	GPIO_DT_SPEC_GET(ADC_NODE, sensor_power_gpios);
 static const struct device *const console_uart =
 	DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 
@@ -60,32 +55,8 @@ static struct k_work mode_work;
 static atomic_t requested_mode = MODE_SAVING;
 static enum energy_mode current_mode = MODE_NONE;
 
-static int setup_leds(void)
-{
-	for (int i = 0; i < BUTTON_COUNT; i++) {
-		
-		if (!gpio_is_ready_dt(&leds[i]) ||
-		    gpio_pin_configure_dt(&leds[i], GPIO_OUTPUT_INACTIVE) != 0) {
-			return -1;
-		}
-	}
-
-	return 0;
-}
-
-static void show_mode_led(enum energy_mode mode){
-	
-	for (int i = 0; i < BUTTON_COUNT; i++) {
-		gpio_pin_set_dt(&leds[i], i == (int)mode);
-	}
-
-}
-
 static void set_energy_mode(enum energy_mode mode)
 {
-	//Habilita un led según el modo que se haya elegido
-	show_mode_led(mode);
-	
 	if (mode == current_mode) {
 		return;
 	}
@@ -169,6 +140,21 @@ static int setup_devices(void)
 		return -1;
 	}
 
+	/* D4/PB5 alimenta el KY-018 solo durante la adquisicion. */
+	if (!gpio_is_ready_dt(&sensor_power) ||
+	    gpio_pin_configure_dt(&sensor_power, GPIO_OUTPUT_INACTIVE) != 0) {
+		return -1;
+	}
+
+#if defined(CONFIG_DEMO_SENSOR_POWER_ALWAYS_ON)
+	/* Configuracion de referencia: el sensor tambien queda detras de JP1,
+	 * pero no se interrumpe entre muestras.
+	 */
+	if (gpio_pin_set_dt(&sensor_power, 1) != 0) {
+		return -1;
+	}
+#endif
+
 	/* enable() entrega el ADC a Runtime PM y lo deja suspendido hasta get(). */
 	if (pm_device_runtime_enable(light_adc.dev) != 0) {
 		return -1;
@@ -183,6 +169,31 @@ static int setup_devices(void)
 	 * reactiva la UART al transmitir y solicita su suspension al terminar.
 	 */
 	return 0;
+}
+
+static int sensor_power_enable(void)
+{
+#if !defined(CONFIG_DEMO_SENSOR_POWER_ALWAYS_ON)
+	int err = gpio_pin_set_dt(&sensor_power, 1);
+
+	if (err != 0) {
+		return err;
+	}
+
+	/* El divisor del KY-018 y la entrada ADC deben asentarse antes de leer. */
+	k_sleep(K_MSEC(CONFIG_DEMO_SENSOR_SETTLE_MS));
+#endif
+
+	return 0;
+}
+
+static int sensor_power_disable(void)
+{
+#if !defined(CONFIG_DEMO_SENSOR_POWER_ALWAYS_ON)
+	return gpio_pin_set_dt(&sensor_power, 0);
+#else
+	return 0;
+#endif
 }
 
 static int read_light(uint16_t *average)
@@ -201,9 +212,16 @@ static int read_light(uint16_t *average)
 		return err;
 	}
 
+	/* La alimentacion externa se gestiona en el mismo tramo que el ADC. */
+	err = sensor_power_enable();
+	if (err != 0) {
+		return err;
+	}
+
 	/* get() despierta el ADC antes de usarlo. */
 	err = pm_device_runtime_get(light_adc.dev);
 	if (err != 0) {
+		(void)sensor_power_disable();
 		return err;
 	}
 
@@ -218,12 +236,16 @@ static int read_light(uint16_t *average)
 
 	/* put() permite volver a suspenderlo. Tambien debe ejecutarse si hubo error. */
 	int pm_err = pm_device_runtime_put(light_adc.dev);
+	int power_err = sensor_power_disable();
 
 	if (err != 0) {
 		return err;
 	}
 	if (pm_err != 0) {
 		return pm_err;
+	}
+	if (power_err != 0) {
+		return power_err;
 	}
 
 	*average = sum / READS_PER_CYCLE;
@@ -245,20 +267,17 @@ int main(void)
 	k_work_init(&mode_work, change_mode);
 	set_energy_mode(MODE_SAVING);
 
-	if (setup_leds() != 0){
-		printk("Error al iniciar los leds\n");
-		return 0;
-	}
-
 	if (setup_buttons() != 0) {
 		printk("Error al iniciar los botones\n");
 		return 0;
 	}
 
 	printk("B1: referencia; B2: respuesta rapida; B3: ahorro\n");
-	printk("Runtime PM: ADC y UART activos\n");
-	printk("Intervalo: %d ms; ADC: A0/PB1\n",
+	printk("Runtime PM habilitado para ADC y UART\n");
+	printk("Intervalo: %d ms; ADC: A0/PB1; KY-018: D4/PB5\n",
 	       CONFIG_DEMO_SAMPLE_INTERVAL_MS);
+	printk("Estabilizacion del sensor: %d ms\n",
+	       CONFIG_DEMO_SENSOR_SETTLE_MS);
 
 	while (1) {
 		uint16_t raw;
@@ -266,13 +285,19 @@ int main(void)
 		/* Esta parte del ciclo es exactamente igual en los tres modos. */
 		int err = read_light(&raw);
 
-		int32_t light_mv = raw;
-		int conv_err = adc_raw_to_millivolts_dt(&light_adc, &light_mv);
-
 		if (err == 0) {
+			int32_t light_mv = raw;
+			int conv_err = adc_raw_to_millivolts_dt(&light_adc, &light_mv);
+
 			sample_count++;
-			printk("Muestra %u -> raw: %u - tension -> %u\n", (unsigned int)sample_count,
-			       (unsigned int)raw, (unsigned int)light_mv);
+			if (conv_err == 0) {
+				printk("Muestra %u -> raw: %u - tension -> %u\n",
+				       (unsigned int)sample_count, (unsigned int)raw,
+				       (unsigned int)light_mv);
+			} else {
+				printk("Muestra %u -> raw: %u - sin conversion a mV\n",
+				       (unsigned int)sample_count, (unsigned int)raw);
+			}
 		} else {
 			printk("Error al leer el ADC\n");
 		}

@@ -9,6 +9,23 @@ config DEMO_SAMPLE_INTERVAL_MS
 	range 100 60000
 	default 1000
 
+config DEMO_SENSOR_SETTLE_MS
+	int "Tiempo de estabilizacion del KY-018 tras alimentarlo (ms)"
+	range 0 1000
+	default 5
+	help
+	  Tiempo entre activar la alimentacion del KY-018 y comenzar las
+	  conversiones ADC. Ajustelo experimentalmente si el modulo instalado
+	  necesita mas tiempo para entregar una lectura estable.
+
+config DEMO_SENSOR_POWER_ALWAYS_ON
+	bool "Mantener alimentado el KY-018 (referencia para JP1)"
+	default n
+	help
+	  Deja D4/PB5 a nivel alto desde el arranque. Permite comparar la
+	  corriente media en JP1 con y sin conmutacion, sin mover la alimentacion
+	  del sensor fuera del punto de medida.
+
 config DEMO_RESPONSE_LATENCY_US
 	int "Latencia maxima solicitada en modo respuesta (us)"
 	range 1 1000000

@@ -4,13 +4,18 @@ Demo para la `NUCLEO-WL55JC1` y un fotoresistor `KY-018`. Lee la luz por el
 ADC, muestra el resultado por el puerto serie y permite cambiar la politica de
 energia con los tres botones de la placa.
 
-No utiliza BLE, LoRa, radio ni LED. En todos los modos se realizan las mismas
+No utiliza BLE, LoRa, radio ni LEDs. En todos los modos se realizan las mismas
 ocho conversiones ADC cada 1000 ms. Lo unico que cambia es la restriccion que
 la aplicacion entrega a la politica de energia de Zephyr.
 
 Esta rama tambien habilita Runtime PM para el ADC y la UART. El ADC se reactiva
 antes de las ocho conversiones y vuelve a suspenderse al terminarlas. La UART
 se reactiva al imprimir y se suspende despues del ultimo caracter.
+
+La rama `experiment/gpio-sensor-power` anade una prueba: el KY-018 se alimenta
+desde Arduino `D4` (`PB5`) en lugar de `3V3`. El firmware enciende ese GPIO
+solo durante la adquisicion, por lo que su corriente pasa a formar parte de la
+medida `I_SoC` de JP1.
 
 ## Cableado
 
@@ -20,13 +25,13 @@ salida `S` es analogica y no necesita componentes externos adicionales.
 | KY-018 | NUCLEO-WL55JC1 |
 |---|---|
 | `-` | `GND` |
-| `+` | `3V3` |
+| `+` | `D4` (`PB5`, GPIO de alimentacion) |
 | `S` | `A0`, que corresponde a PB1/ADC1_IN5 |
 
 Con el modulo orientado como en la foto original, los pines son `-`, `+` y `S`
 de arriba abajo. Como existen copias con serigrafia incorrecta, conviene
-comprobarlo antes con un multimetro. Alimente siempre el modulo con 3.3 V y
-verifique que `S` permanece entre 0 y 3.3 V. No use 5 V.
+comprobarlo antes con un multimetro. No conecte a la vez `D4` y `3V3` al pin
+`+`. Verifique que `S` permanece entre 0 y 3.3 V. No use 5 V.
 
 ## Modos
 
@@ -51,15 +56,25 @@ latencia extremo a extremo.
 Durante cada ciclo ocurre lo siguiente:
 
 ```text
+activar D4/PB5
+esperar CONFIG_DEMO_SENSOR_SETTLE_MS
 pm_device_runtime_get(ADC)
 ocho conversiones
 pm_device_runtime_put(ADC)
+desactivar D4/PB5
 k_sleep()
 ```
 
 El `get` reactiva el ADC y aumenta su contador de uso. El `put` reduce el
 contador a cero y lo suspende. Por eso el ADC permanece apagado entre muestras,
 incluso en referencia, donde los estados STOP estan bloqueados.
+
+El valor inicial de `CONFIG_DEMO_SENSOR_SETTLE_MS` es 5 ms. Debe aumentarse si
+las lecturas cambian al comparar con una espera mayor; puede reducirse despues
+de comprobar experimentalmente que el modulo se estabiliza. Para la referencia
+de consumo, active `CONFIG_DEMO_SENSOR_POWER_ALWAYS_ON=y`: mantiene el mismo
+sensor alimentado desde D4/PB5, pero permanentemente, de modo que ambas
+mediciones de JP1 incluyen su corriente.
 
 `CONFIG_PM_DEVICE_SYSTEM_MANAGED` se mantiene activo para los demas
 perifericos. Zephyr no vuelve a suspender el ADC al entrar en STOP porque ya
@@ -85,6 +100,17 @@ Desde PowerShell, en la raiz del proyecto:
 .\scripts\flash.ps1
 ```
 
+Para el primer punto de comparacion de JP1 (sensor siempre alimentado, pero
+desde D4/PB5), construya y flashee con:
+
+```powershell
+.\scripts\build.ps1 -SensorAlwaysOn
+.\scripts\flash.ps1
+```
+
+Vuelva a ejecutar `build.ps1` sin parametros y flashee de nuevo para la prueba
+con alimentacion conmutada.
+
 Tambien estan disponibles las tareas `Demo: Build`, `Demo: Flash` y
 `Serial Monitor` en VS Code.
 
@@ -104,7 +130,9 @@ el nombre del nuevo modo y las muestras continúan apareciendo.
 ## Medicion de corriente
 
 El puente `JP1`, rotulado `I_SoC`, permite medir en serie la corriente del
-STM32WL. Esa medida no incluye toda la placa, el ST-LINK ni el KY-018.
+STM32WL. En la configuracion normal de esta rama, la corriente del KY-018 pasa
+por el GPIO D4/PB5 y por tanto tambien se ve en JP1. La medida no incluye toda
+la placa ni el ST-LINK.
 
 Con la placa sin alimentacion:
 
@@ -131,7 +159,10 @@ suspendia la UART durante STOP. El efecto suele ser mas visible en referencia,
 donde la CPU no entra en STOP pero Runtime PM si puede apagar los perifericos.
 
 Un multimetro convencional muestra principalmente un promedio y puede no
-capturar los pulsos breves de actividad del ADC y la UART.
+capturar los pulsos breves de actividad del ADC, la UART y la alimentacion del
+sensor. Para una comparacion valida, mida primero con
+`CONFIG_DEMO_SENSOR_POWER_ALWAYS_ON=y` y despues con la opcion desactivada,
+manteniendo el resto de la configuracion y el cableado sin cambios.
 
 ## Archivos principales
 

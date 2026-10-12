@@ -1,3 +1,7 @@
+param(
+    [switch]$SensorAlwaysOn
+)
+
 $ErrorActionPreference = "Stop"
 
 $ProjectDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -15,8 +19,12 @@ Write-Host "Build: $BuildDir"
 
 Push-Location $ZephyrDir
 try {
-    & $WestExe build -p always -b nucleo_wl55jc $ProjectDir -d $BuildDir -- `
-        "-DDTC_OVERLAY_FILE=boards/nucleo_wl55jc.overlay"
+    $CmakeArgs = @("-DDTC_OVERLAY_FILE=boards/nucleo_wl55jc.overlay")
+    if ($SensorAlwaysOn) {
+        $CmakeArgs += "-DCONFIG_DEMO_SENSOR_POWER_ALWAYS_ON=y"
+    }
+
+    & $WestExe build -p always -b nucleo_wl55jc $ProjectDir -d $BuildDir -- $CmakeArgs
     if ($LASTEXITCODE -ne 0) {
         throw "west build termino con codigo $LASTEXITCODE"
     }
