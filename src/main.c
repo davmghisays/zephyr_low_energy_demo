@@ -34,6 +34,13 @@ static const struct gpio_dt_spec buttons[BUTTON_COUNT] = {
 	GPIO_DT_SPEC_GET(DT_ALIAS(sw2), gpios),
 };
 
+// Declara y habilita los leds que vienen en la placa según como fueron aliased en el overlay
+static const struct gpio_dt_spec leds[BUTTON_COUNT] = {
+	GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios),
+	GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios),
+	GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios),
+};
+
 /* Estos dos dispositivos se obtienen del Devicetree de la placa. */
 static const struct adc_dt_spec light_adc = ADC_DT_SPEC_GET(ADC_NODE);
 static const struct device *const console_uart =
@@ -53,8 +60,32 @@ static struct k_work mode_work;
 static atomic_t requested_mode = MODE_SAVING;
 static enum energy_mode current_mode = MODE_NONE;
 
+static int setup_leds(void)
+{
+	for (int i = 0; i < BUTTON_COUNT; i++) {
+		
+		if (!gpio_is_ready_dt(&leds[i]) ||
+		    gpio_pin_configure_dt(&leds[i], GPIO_OUTPUT_INACTIVE) != 0) {
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+static void show_mode_led(enum energy_mode mode){
+	
+	for (int i = 0; i < BUTTON_COUNT; i++) {
+		gpio_pin_set_dt(&leds[i], i == (int)mode);
+	}
+
+}
+
 static void set_energy_mode(enum energy_mode mode)
 {
+	//Habilita un led según el modo que se haya elegido
+	show_mode_led(mode);
+	
 	if (mode == current_mode) {
 		return;
 	}
@@ -214,6 +245,11 @@ int main(void)
 	k_work_init(&mode_work, change_mode);
 	set_energy_mode(MODE_SAVING);
 
+	if (setup_leds() != 0){
+		printk("Error al iniciar los leds\n");
+		return 0;
+	}
+
 	if (setup_buttons() != 0) {
 		printk("Error al iniciar los botones\n");
 		return 0;
@@ -230,10 +266,13 @@ int main(void)
 		/* Esta parte del ciclo es exactamente igual en los tres modos. */
 		int err = read_light(&raw);
 
+		int32_t light_mv = raw;
+		int conv_err = adc_raw_to_millivolts_dt(&light_adc, &light_mv);
+
 		if (err == 0) {
 			sample_count++;
-			printk("Muestra %u: %u\n", (unsigned int)sample_count,
-			       (unsigned int)raw);
+			printk("Muestra %u -> raw: %u - tension -> %u\n", (unsigned int)sample_count,
+			       (unsigned int)raw, (unsigned int)light_mv);
 		} else {
 			printk("Error al leer el ADC\n");
 		}

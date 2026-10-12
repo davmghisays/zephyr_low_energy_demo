@@ -1,6 +1,12 @@
 #include <zephyr/dt-bindings/adc/adc.h>
 
 / {
+	aliases{
+		led0 = &blue_led_1;
+		led1 = &green_led_2;
+		led2 = &red_led_3;
+	};
+	
 	zephyr,user {
 		/* Arduino A0 = PB1 = ADC1_IN5 en esta placa. */
 		io-channels = <&adc1 5>;

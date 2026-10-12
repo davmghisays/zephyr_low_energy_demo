@@ -13,3 +13,6 @@ compile_commands.json
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Copia local de estudio: main.c explicado linea por linea
+/src/main_comentado.c
